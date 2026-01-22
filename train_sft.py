@@ -6,6 +6,7 @@ import argparse, os, json
 # HF / TRL / PyTorch stack
 from transformers import BitsAndBytesConfig, AutoModelForCausalLM
 from transformers import AutoTokenizer
+import transformers
 from trl import SFTTrainer, SFTConfig
 from peft import LoraConfig
 from datasets import load_dataset
@@ -13,6 +14,7 @@ import torch
 
 # project code
 from dataset_utils import multiturn_dataset_to_sft
+from train_utils import get_timebased_filename
 
 logger = logging.getLogger(__name__)
 
@@ -52,16 +54,16 @@ def load_and_train_sft(
     
     """ Load a Hugging Face model and perform supervised fine-tuning (SFT) on the provided dataset. """
 
-    # logger.info(f"Running SFT on model: {hf_model_path} with dataset: {hf_dataset_path}")
-    # logger.info(f"cuda current device: f{torch.cuda.current_device()}")
+    logger.info(f"Running SFT on model: {hf_model_path} with dataset: {hf_dataset_path}")
+    logger.info(f"cuda current device: f{torch.cuda.current_device()}")
 
     # # use bf16 if supported by GPU
-    # dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     dtype = torch.float16
 
     dataset = load_dataset(
         hf_dataset_path, 
-        # cache_dir="./data_cache",
+        cache_dir="./data_cache",
         split="train"
         )
     
@@ -79,11 +81,18 @@ def load_and_train_sft(
         bnb_4bit_quant_storage=dtype,
     )
 
+    is_flash_attn_2_available = transformers.utils.is_flash_attn_2_available()
+    if is_flash_attn_2_available:
+        logger.info("✅ FlashAttention-2 is installed and hardware-compatible.")
+    else:
+        logger.warning("❌ FlashAttention-2 is NOT available.")
+
     model = AutoModelForCausalLM.from_pretrained(
         hf_model_path,
         cache_dir="./model_cache",
         quantization_config=bnb_config,
         torch_dtype=dtype,
+        attn_implementation="flash_attention_2" if is_flash_attn_2_available else "sdpa",
         device_map={"":0}
     )
 
@@ -111,9 +120,9 @@ def load_and_train_sft(
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=1,
         logging_steps=True,
-        # max_seq_length=1024,
+        max_seq_length=1024,
         learning_rate=learning_rate,
-        packing=True,
+        # packing=True,
     )
 
     trainer = SFTTrainer(
@@ -130,6 +139,14 @@ def load_and_train_sft(
     # custom eval on data?
 
     # save trained model to hf?
+    model.save_pretrained(f"./sft-model-{get_timebased_filename()}")
+    tokenizer.save_pretrained(f"./sft-model-{get_timebased_filename()}")
+
+    trainer.push_to_hub(
+        f"sft-model-{get_timebased_filename()}",
+        organization="boreasg",  # replace with your HF org or username
+        private=True,
+    )
 
 def main() -> None:
     args = parse_args()
