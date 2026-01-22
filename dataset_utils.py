@@ -36,9 +36,14 @@ def multiturn_dataset_to_sft(
     conv_id_to_final_row = {}
     
     for row in dataset:
-        prev = conv_id_to_final_row.get(row['conv_id'])
-        if prev is None or row['turn_id'] > prev['turn_id'] or (row['turn_id'] == prev['turn_id'] and row['score'] > prev['score']):
-            conv_id_to_final_row[row['conv_id']] = row
+        try:
+            prev = conv_id_to_final_row.get(row["conv_id"])
+            if prev is None or row["turn_id"] > prev['turn_id'] or (row['turn_id'] == prev['turn_id'] and row['score'] > prev['score']):
+                conv_id_to_final_row[row["conv_id"]] = row
+        except Exception as e:
+            logger.error(f"Failed processing dataset row: {row} with error: {e}")
+            continue
+
 
     for row in conv_id_to_final_row.values():
         if row['score'] < lower_bound_metric:
