@@ -1,3 +1,8 @@
 # Environment Files
 uv.lock
 .venv/
+
+# Caches
+model_cache/
+data_cache/
+__pycache__/
