@@ -137,6 +137,8 @@ def load_and_train_sft(
     # training
     training_arguments = SFTConfig(
         output_dir="./results",
+        hub_model_id=f"sft-model-{output_name_tag}-{get_timebased_filename()}",
+        push_to_hub=True,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=1,
         logging_steps=True,
@@ -162,11 +164,11 @@ def load_and_train_sft(
     model.save_pretrained(f"./sft-model-{output_name_tag}-{get_timebased_filename()}")
     tokenizer.save_pretrained(f"./sft-model-{output_name_tag}-{get_timebased_filename()}")
 
-    trainer.push_to_hub(
-        f"sft-model-{output_name_tag}-{get_timebased_filename()}",
-        organization="boreasg",  # replace with your HF org or username
-        private=True,
-    )
+    # trainer.push_to_hub(
+    #     f"sft-model-{output_name_tag}-{get_timebased_filename()}",
+    #     organization="boreasg",  # replace with your HF org or username
+    #     private=True,
+    # )
 
 def main() -> None:
     args = parse_args()
