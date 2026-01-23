@@ -77,8 +77,8 @@ def load_and_train_sft(
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_type=dtype,
-        bnb_4bit_quant_storage=dtype,
+        bnb_4bit_compute_dtype=dtype,
+        # bnb_4bit_quant_storage=dtype,
     )
 
     is_flash_attn_2_available = transformers.utils.is_flash_attn_2_available()
@@ -96,6 +96,8 @@ def load_and_train_sft(
         device_map={"":0}
     )
 
+    model.config.use_cache = False # TODO: remove if no VRAM bottleneck?
+
     tokenizer = AutoTokenizer.from_pretrained(
         hf_model_path,
         cache_dir="./model_cache",
@@ -108,8 +110,9 @@ def load_and_train_sft(
     peft_config = LoraConfig(
         lora_alpha=16,
         lora_dropout=0.1,
-        r=64,
+        r=16,
         bias="none",
+        init_lora_weights="gaussian",
         task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
     )
@@ -121,6 +124,7 @@ def load_and_train_sft(
         gradient_accumulation_steps=1,
         logging_steps=True,
         learning_rate=learning_rate,
+        gradient_checkpointing=True,
         # packing=True,
     )
 
