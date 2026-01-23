@@ -49,6 +49,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Whether to parse secrets from RunPod environment variables.",
     )
+    parser.add_argument(
+        "--output_name_tag",
+        type=str,
+        default="default",
+        help="Tag to append to the output model name.",
+    )
     return parser.parse_args()
 
 def load_and_train_sft(
@@ -56,20 +62,21 @@ def load_and_train_sft(
         hf_dataset_path: str,
         learning_rate: float = 2e-5,
         batch_size: int = 4,
-        parse_secrets_runpod: bool = False,):
+        parse_secrets_runpod: bool = False,
+        output_name_tag: str = "default"):
     
     """ Load a Hugging Face model and perform supervised fine-tuning (SFT) on the provided dataset. """
 
     if parse_secrets_runpod:
         os.environ["HF_TOKEN"] = os.environ.get("RUNPOD_SECRET_HF_TOKEN", "") or os.environ.get("HF_TOKEN", "")
         os.environ["WANDB_API_KEY"] = os.environ.get("RUNPOD_SECRET_WANDB_API_KEY", "") or os.environ.get("WANDB_API_KEY", "")
-        
+
     logger.info(f"Running SFT on model: {hf_model_path} with dataset: {hf_dataset_path}")
     logger.info(f"cuda current device: f{torch.cuda.current_device()}")
 
     # # use bf16 if supported by GPU
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    dtype = torch.float16
+    # dtype = torch.float16
 
     dataset = load_dataset(
         hf_dataset_path, 
@@ -152,11 +159,11 @@ def load_and_train_sft(
     # custom eval on data?
 
     # save trained model to hf?
-    model.save_pretrained(f"./sft-model-{get_timebased_filename()}")
-    tokenizer.save_pretrained(f"./sft-model-{get_timebased_filename()}")
+    model.save_pretrained(f"./sft-model-{output_name_tag}-{get_timebased_filename()}")
+    tokenizer.save_pretrained(f"./sft-model-{output_name_tag}-{get_timebased_filename()}")
 
     trainer.push_to_hub(
-        f"sft-model-{get_timebased_filename()}",
+        f"sft-model-{output_name_tag}-{get_timebased_filename()}",
         organization="boreasg",  # replace with your HF org or username
         private=True,
     )
@@ -193,6 +200,7 @@ def main() -> None:
         learning_rate=args.learning_rate,
         batch_size=args.batch_size,
         parse_secrets_runpod=args.parse_secrets_runpod,
+        output_name_tag=args.output_name_tag,
     )
 
 if __name__ == "__main__":
