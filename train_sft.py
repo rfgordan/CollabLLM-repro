@@ -120,7 +120,6 @@ def load_and_train_sft(
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=1,
         logging_steps=True,
-        max_seq_length=1024,
         learning_rate=learning_rate,
         # packing=True,
     )
