@@ -1,4 +1,5 @@
-import logging, datetime
+import logging
+from datetime import datetime
 
 def get_timebased_filename():
   # Get the current time

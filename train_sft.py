@@ -44,16 +44,26 @@ def parse_args() -> argparse.Namespace:
         default=4,
         help="Batch size for training.",
     )
+    parser.add_argument(
+        "--parse_secrets_runpod",
+        action="store_true",
+        help="Whether to parse secrets from RunPod environment variables.",
+    )
     return parser.parse_args()
 
 def load_and_train_sft(
         hf_model_path: str, 
         hf_dataset_path: str,
         learning_rate: float = 2e-5,
-        batch_size: int = 4,):
+        batch_size: int = 4,
+        parse_secrets_runpod: bool = False,):
     
     """ Load a Hugging Face model and perform supervised fine-tuning (SFT) on the provided dataset. """
 
+    if parse_secrets_runpod:
+        os.environ["HF_TOKEN"] = os.environ.get("RUNPOD_SECRET_HF_TOKEN", "") or os.environ.get("HF_TOKEN", "")
+        os.environ["WANDB_API_KEY"] = os.environ.get("RUNPOD_SECRET_WANDB_API_KEY", "") or os.environ.get("WANDB_API_KEY", "")
+        
     logger.info(f"Running SFT on model: {hf_model_path} with dataset: {hf_dataset_path}")
     logger.info(f"cuda current device: f{torch.cuda.current_device()}")
 
@@ -182,6 +192,7 @@ def main() -> None:
         hf_dataset_path=args.hf_dataset_path,
         learning_rate=args.learning_rate,
         batch_size=args.batch_size,
+        parse_secrets_runpod=args.parse_secrets_runpod,
     )
 
 if __name__ == "__main__":
