@@ -152,7 +152,7 @@ def load_and_train_sft(
         num_train_epochs=2,
         eval_strategy="steps",
         eval_steps=500,
-        save_strategy="epochs",
+        save_strategy="epoch",
         # packing=True,
     )
 
