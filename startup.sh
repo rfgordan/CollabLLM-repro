@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /workspace
+# cd /workspace
 
 # 1. Install uv if missing
 if ! command -v uv &>/dev/null; then
@@ -10,13 +10,13 @@ if ! command -v uv &>/dev/null; then
 fi
 
 # 2. Clone or update repo
-if [ ! -d CollabLLM-repro ]; then
-  git clone https://github.com/rfgordan/CollabLLM-repro
-else
-  cd CollabLLM-repro
-  git pull --rebase
-  cd ..
-fi
+# if [ ! -d CollabLLM-repro ]; then
+#   git clone https://github.com/rfgordan/CollabLLM-repro
+# else
+#   cd CollabLLM-repro
+#   git pull --rebase
+#   cd ..
+# fi
 
 cd CollabLLM-repro
 
@@ -25,4 +25,4 @@ uv sync
 source ./venv/bin/activate
 
 # 4. Optional: start shell or training
-exec "$@"
+# exec "$@"
