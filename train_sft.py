@@ -150,8 +150,8 @@ def load_and_train_sft(
         learning_rate=learning_rate,
         gradient_checkpointing=True,
         num_train_epochs=2,
-        eval_strategy="steps",
-        eval_steps=500,
+        eval_strategy="epoch",
+        # eval_steps=500,
         save_strategy="epoch",
         # packing=True,
     )

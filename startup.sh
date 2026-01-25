@@ -23,7 +23,7 @@ cd CollabLLM-repro
 
 # 3. Sync deps
 uv sync
-source ./venv/bin/activate
+source .venv/bin/activate
 
 # 4. Optional: start shell or training
 # exec "$@"
