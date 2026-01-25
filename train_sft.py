@@ -2,6 +2,7 @@
 from typing import Any
 import logging
 import argparse, os, json
+import wandb
 
 # HF / TRL / PyTorch stack
 from transformers import BitsAndBytesConfig, AutoModelForCausalLM
@@ -134,16 +135,24 @@ def load_and_train_sft(
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
     )
 
+    run_name: str = f"sft-{output_name_tag}-{get_timebased_filename()}"
+
     # training
     training_arguments = SFTConfig(
         output_dir="./results",
-        hub_model_id=f"sft-model-{output_name_tag}-{get_timebased_filename()}",
+        hub_model_id=run_name,
         push_to_hub=True,
+        run_name=run_name,  # This names your W&B run
+        report_to="wandb",
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=1,
         logging_steps=True,
         learning_rate=learning_rate,
         gradient_checkpointing=True,
+        num_train_epochs=2,
+        eval_strategy="steps",
+        eval_steps=500,
+        save_strategy="epochs",
         # packing=True,
     )
 
@@ -154,6 +163,7 @@ def load_and_train_sft(
         peft_config=peft_config,
         processing_class=tokenizer,
         args=training_arguments,
+        # callbacks=[CustomMetricsCallback()],
     )
     
     trainer.train()
@@ -161,14 +171,16 @@ def load_and_train_sft(
     # custom eval on data?
 
     # save trained model to hf?
-    model.save_pretrained(f"./sft-model-{output_name_tag}-{get_timebased_filename()}")
-    tokenizer.save_pretrained(f"./sft-model-{output_name_tag}-{get_timebased_filename()}")
+    model.save_pretrained(f"./{run_name}")
+    tokenizer.save_pretrained(f"./{run_name}")
 
     # trainer.push_to_hub(
     #     f"sft-model-{output_name_tag}-{get_timebased_filename()}",
     #     organization="boreasg",  # replace with your HF org or username
     #     private=True,
     # )
+
+    # wandb.finish()
 
 def main() -> None:
     args = parse_args()
