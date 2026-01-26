@@ -2,7 +2,6 @@
 from typing import Any
 import logging
 import argparse, os, json
-import wandb
 
 # HF / TRL / PyTorch stack
 from transformers import BitsAndBytesConfig, AutoModelForCausalLM
