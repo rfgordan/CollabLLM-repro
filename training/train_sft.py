@@ -13,7 +13,7 @@ from datasets import load_dataset
 import torch
 
 # project code
-from dataset_utils import multiturn_dataset_to_sft
+from collabllm.data_processing.dataset_utils import multiturn_dataset_to_sft
 from train_utils import get_timebased_filename
 
 logger = logging.getLogger(__name__)
