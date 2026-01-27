@@ -6,3 +6,7 @@ uv.lock
 model_cache/
 data_cache/
 __pycache__/
+
+# Package Info
+*.egg-info/
+.DS_Store

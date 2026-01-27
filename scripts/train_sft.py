@@ -14,7 +14,7 @@ import torch
 
 # project code
 from collabllm.data_processing.dataset_utils import multiturn_dataset_to_sft
-from train_utils import get_timebased_filename
+from collabllm.training.train_utils import get_timebased_filename
 
 logger = logging.getLogger(__name__)
 

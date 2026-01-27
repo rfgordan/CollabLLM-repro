@@ -19,3 +19,8 @@ dependencies = [
 dev = [
     "ipykernel>=7.1.0",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["collabllm*", "collabllm/*"]
+exclude = ["notebooks", "data_cache", "model_cache", "results"]
