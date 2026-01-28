@@ -1,11 +1,21 @@
 from typing import List, Dict, Optional
+from dataclasses import dataclass, field
 import logging
 from copy import deepcopy
 
-from collabllm.simulation.user_models import UserModel
+from collabllm.simulation.user_models import UserModel, UserTurnResult
 from collabllm.simulation.assistant import LocalAssistant
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RolloutResult:
+    """Result of a chat simulation rollout."""
+
+    messages: List[Dict[str, str]]
+    user_turns: List[UserTurnResult] = field(default_factory=list)
+    terminated_by_user: bool = False
 
 
 class ChatSimulator:
@@ -36,9 +46,10 @@ class ChatSimulator:
         conversation_prefix: List[Dict[str, str]],
         max_turns: int,
         start_with_assistant: Optional[bool] = None,
-    ) -> List[Dict[str, str]]:
+    ) -> RolloutResult:
         """
-        Continue a conversation from a prefix until max_turns is reached.
+        Continue a conversation from a prefix until max_turns is reached
+        or the user model signals termination.
 
         A "turn" is one exchange (user message + assistant response).
 
@@ -51,9 +62,12 @@ class ChatSimulator:
                 If None, automatically determined from the last message in prefix.
 
         Returns:
-            Complete conversation as list of messages (prefix + generated)
+            RolloutResult with messages, per-turn user model outputs, and
+            whether the user model terminated the conversation.
         """
         messages = deepcopy(conversation_prefix)
+        user_turns: List[UserTurnResult] = []
+        terminated_by_user = False
 
         if start_with_assistant is None:
             start_with_assistant = self._should_assistant_go_next(messages)
@@ -67,8 +81,15 @@ class ChatSimulator:
                 messages.append({"role": "assistant", "content": response})
                 logger.info(f"Turn {turns_completed + 1}: Assistant responded")
             else:
-                response = self.user_model.generate(messages)
-                messages.append({"role": "user", "content": response})
+                result = self.user_model.generate(messages)
+                user_turns.append(result)
+
+                if result.is_terminal:
+                    logger.info(f"Turn {turns_completed + 1}: User signaled termination")
+                    terminated_by_user = True
+                    break
+
+                messages.append({"role": "user", "content": result.response})
                 logger.info(f"Turn {turns_completed + 1}: User responded")
 
             if not assistant_turn:
@@ -77,12 +98,16 @@ class ChatSimulator:
             assistant_turn = not assistant_turn
 
         # Ensure conversation ends with assistant response
-        if assistant_turn:
+        if not terminated_by_user and assistant_turn:
             response = self.assistant.generate(messages)
             messages.append({"role": "assistant", "content": response})
             logger.info("Final assistant response added")
 
-        return messages
+        return RolloutResult(
+            messages=messages,
+            user_turns=user_turns,
+            terminated_by_user=terminated_by_user,
+        )
 
     def _should_assistant_go_next(self, messages: List[Dict[str, str]]) -> bool:
         """Determine if assistant should respond next based on last non-system message."""
@@ -97,7 +122,7 @@ class ChatSimulator:
         self,
         conversation_prefix: List[Dict[str, str]],
         max_turns: int = 10,
-    ) -> List[Dict[str, str]]:
+    ) -> RolloutResult:
         """
         Interactive chat session with option to override or auto-generate responses.
 
@@ -111,11 +136,13 @@ class ChatSimulator:
             max_turns: Maximum turns before auto-stopping (default 10).
 
         Returns:
-            Complete conversation as list of messages
+            RolloutResult with messages and user turn metadata
         """
         messages = deepcopy(conversation_prefix)
+        user_turns: List[UserTurnResult] = []
         assistant_turn = self._should_assistant_go_next(messages)
         turns_completed = 0
+        terminated_by_user = False
 
         print("\n" + "=" * 60)
         print("Interactive Chat Session")
@@ -142,17 +169,32 @@ class ChatSimulator:
                 print("Session ended.")
                 break
 
-            if user_input:
-                response = user_input
-            else:
-                print("  (generating...)", end="\r")
-                if assistant_turn:
-                    response = self.assistant.generate(messages)
+            if assistant_turn:
+                if user_input:
+                    response = user_input
                 else:
-                    response = self.user_model.generate(messages)
-                print(f"  {response}")
+                    print("  (generating...)", end="\r")
+                    response = self.assistant.generate(messages)
+                    print(f"  {response}")
+                messages.append({"role": "assistant", "content": response})
+            else:
+                if user_input:
+                    result = UserTurnResult(response=user_input)
+                else:
+                    print("  (generating...)", end="\r")
+                    result = self.user_model.generate(messages)
+                    print(f"  {result.response}")
+                    if result.thought:
+                        print(f"  [thought: {result.thought}]")
 
-            messages.append({"role": role, "content": response})
+                user_turns.append(result)
+
+                if result.is_terminal:
+                    print("  (user model signaled end of conversation)")
+                    terminated_by_user = True
+                    break
+
+                messages.append({"role": "user", "content": result.response})
 
             if not assistant_turn:
                 turns_completed += 1
@@ -163,7 +205,11 @@ class ChatSimulator:
         print(f"Session complete. {len(messages)} messages total.")
         print("=" * 60)
 
-        return messages
+        return RolloutResult(
+            messages=messages,
+            user_turns=user_turns,
+            terminated_by_user=terminated_by_user,
+        )
 
     def _print_message(self, msg: Dict[str, str]) -> None:
         """Print a formatted message."""

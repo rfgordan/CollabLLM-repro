@@ -1,24 +1,44 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import List, Dict, Optional
+from pathlib import Path
+import json
 import logging
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_USER_SYSTEM_PROMPT = (
-    "You are simulating a user in a conversation with an AI assistant. "
-    "Based on the conversation history, generate a natural follow-up message as the user. "
-    "Stay in character and be consistent with the user's previous messages and goals."
-)
+PROMPT_TEMPLATE_PATH = Path(__file__).parent.parent / "prompts" / "user_simulator.txt"
+
+DEFAULT_TERMINAL_SIGNAL = "[END]"
+
+
+@dataclass
+class UserTurnResult:
+    """Structured output from a user simulation turn."""
+
+    response: str
+    thought: str = ""
+    current_answer: str = ""
+    is_terminal: bool = False
+    raw_output: str = ""
 
 
 class UserModel(ABC):
     """Abstract base class for user simulation models."""
 
-    def __init__(self, system_prompt: Optional[str] = None):
-        self.system_prompt = system_prompt or DEFAULT_USER_SYSTEM_PROMPT
+    def __init__(
+        self,
+        task_desc: str,
+        single_turn_prompt: str,
+        terminal_signal: str = DEFAULT_TERMINAL_SIGNAL,
+    ):
+        self.task_desc = task_desc
+        self.single_turn_prompt = single_turn_prompt
+        self.terminal_signal = terminal_signal
+        self._prompt_template = PROMPT_TEMPLATE_PATH.read_text()
 
     @abstractmethod
-    def generate(self, messages: List[Dict[str, str]]) -> str:
+    def generate(self, messages: List[Dict[str, str]]) -> UserTurnResult:
         """
         Generate a user response given the conversation history.
 
@@ -26,28 +46,61 @@ class UserModel(ABC):
             messages: Conversation history as list of {"role": str, "content": str}
 
         Returns:
-            Generated user message content
+            UserTurnResult with structured response fields
         """
         pass
 
-    def _prepare_messages_for_user_perspective(
-        self, messages: List[Dict[str, str]]
-    ) -> List[Dict[str, str]]:
-        """
-        Transform messages so the user model sees the conversation from the user's perspective.
-        Swaps assistant/user roles so the model generates as if it were the user.
-        """
-        transformed = [{"role": "system", "content": self.system_prompt}]
+    def _format_prompt(self, messages: List[Dict[str, str]]) -> str:
+        """Fill the prompt template with conversation-specific fields."""
+        chat_history = self._format_chat_history(messages)
+        return self._prompt_template.format(
+            task_desc=self.task_desc,
+            single_turn_prompt=self.single_turn_prompt,
+            chat_history=chat_history,
+            terminal_signal=self.terminal_signal,
+        )
 
+    def _format_chat_history(self, messages: List[Dict[str, str]]) -> str:
+        """Format message list as text for the prompt template."""
+        lines = []
         for msg in messages:
             if msg["role"] == "system":
                 continue
-            elif msg["role"] == "user":
-                transformed.append({"role": "assistant", "content": msg["content"]})
-            elif msg["role"] == "assistant":
-                transformed.append({"role": "user", "content": msg["content"]})
+            label = "USER" if msg["role"] == "user" else "AI"
+            lines.append(f"{label}: {msg['content']}")
+        return "\n".join(lines) if lines else "(empty)"
 
-        return transformed
+    def _parse_response(self, raw_output: str) -> UserTurnResult:
+        """Parse the model's JSON response into a UserTurnResult."""
+        try:
+            # Strip markdown code fences if present
+            text = raw_output.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+
+            parsed = json.loads(text)
+
+            response = parsed.get("response", "")
+            is_terminal = response.strip() == self.terminal_signal
+
+            return UserTurnResult(
+                response=response,
+                thought=parsed.get("thought", ""),
+                current_answer=parsed.get("current_answer", ""),
+                is_terminal=is_terminal,
+                raw_output=raw_output,
+            )
+        except (json.JSONDecodeError, AttributeError) as e:
+            logger.warning(f"Failed to parse user model JSON output: {e}")
+            logger.debug(f"Raw output was: {raw_output}")
+            return UserTurnResult(
+                response=raw_output,
+                is_terminal=False,
+                raw_output=raw_output,
+            )
 
 
 class OpenAIUserModel(UserModel):
@@ -55,13 +108,15 @@ class OpenAIUserModel(UserModel):
 
     def __init__(
         self,
+        task_desc: str,
+        single_turn_prompt: str,
+        terminal_signal: str = DEFAULT_TERMINAL_SIGNAL,
         model: str = "gpt-4o-mini",
-        system_prompt: Optional[str] = None,
         api_key: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ):
-        super().__init__(system_prompt)
+        super().__init__(task_desc, single_turn_prompt, terminal_signal)
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -73,16 +128,17 @@ class OpenAIUserModel(UserModel):
 
         self.client = OpenAI(api_key=api_key)
 
-    def generate(self, messages: List[Dict[str, str]]) -> str:
-        transformed = self._prepare_messages_for_user_perspective(messages)
+    def generate(self, messages: List[Dict[str, str]]) -> UserTurnResult:
+        prompt = self._format_prompt(messages)
 
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=transformed,
+            messages=[{"role": "user", "content": prompt}],
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )
 
-        content = response.choices[0].message.content
-        logger.debug(f"UserModel generated: {content[:100]}...")
-        return content
+        raw_output = response.choices[0].message.content
+        logger.debug(f"UserModel raw output: {raw_output[:200]}...")
+
+        return self._parse_response(raw_output)

@@ -1,27 +1,39 @@
 """Tests for the simulation module."""
 
+import json
 import pytest
 from typing import List, Dict
 from unittest.mock import MagicMock, patch
 
-from collabllm.simulation.user_models import UserModel, DEFAULT_USER_SYSTEM_PROMPT
-from collabllm.simulation.simulator import ChatSimulator
+from collabllm.simulation.user_models import (
+    UserModel,
+    UserTurnResult,
+    DEFAULT_TERMINAL_SIGNAL,
+)
+from collabllm.simulation.simulator import ChatSimulator, RolloutResult
+
+
+# -- Mock implementations --
 
 
 class MockUserModel(UserModel):
-    """Mock user model for testing."""
+    """Mock user model that returns pre-defined UserTurnResults."""
 
-    def __init__(self, responses: List[str], system_prompt: str = None):
-        super().__init__(system_prompt)
-        self.responses = responses
+    def __init__(self, results: List[UserTurnResult]):
+        super().__init__(
+            task_desc="Test task",
+            single_turn_prompt="Test prompt",
+            terminal_signal=DEFAULT_TERMINAL_SIGNAL,
+        )
+        self.results = results
         self.call_count = 0
         self.received_messages = []
 
-    def generate(self, messages: List[Dict[str, str]]) -> str:
+    def generate(self, messages: List[Dict[str, str]]) -> UserTurnResult:
         self.received_messages.append(messages)
-        response = self.responses[self.call_count % len(self.responses)]
+        result = self.results[self.call_count % len(self.results)]
         self.call_count += 1
-        return response
+        return result
 
 
 class MockAssistant:
@@ -39,58 +51,113 @@ class MockAssistant:
         return response
 
 
-class TestUserModelAbstraction:
-    """Tests for the UserModel base class."""
+# -- UserModel tests --
 
-    def test_default_system_prompt(self):
-        model = MockUserModel(responses=["test"])
-        assert model.system_prompt == DEFAULT_USER_SYSTEM_PROMPT
 
-    def test_custom_system_prompt(self):
-        custom_prompt = "You are a test user."
-        model = MockUserModel(responses=["test"], system_prompt=custom_prompt)
-        assert model.system_prompt == custom_prompt
+class TestUserModelPromptFormatting:
+    """Tests for prompt template formatting."""
 
-    def test_perspective_transformation_swaps_roles(self):
-        model = MockUserModel(responses=["test"])
+    def test_format_chat_history_basic(self):
+        model = MockUserModel(results=[UserTurnResult(response="test")])
         messages = [
-            {"role": "system", "content": "Be helpful."},
+            {"role": "system", "content": "System prompt"},
             {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there!"},
-            {"role": "user", "content": "How are you?"},
+            {"role": "assistant", "content": "Hi there"},
         ]
 
-        transformed = model._prepare_messages_for_user_perspective(messages)
+        history = model._format_chat_history(messages)
 
-        assert transformed[0]["role"] == "system"
-        assert transformed[0]["content"] == model.system_prompt
-        assert transformed[1]["role"] == "assistant"
-        assert transformed[1]["content"] == "Hello"
-        assert transformed[2]["role"] == "user"
-        assert transformed[2]["content"] == "Hi there!"
-        assert transformed[3]["role"] == "assistant"
-        assert transformed[3]["content"] == "How are you?"
+        assert "USER: Hello" in history
+        assert "AI: Hi there" in history
+        assert "System prompt" not in history
 
-    def test_perspective_transformation_excludes_original_system(self):
-        model = MockUserModel(responses=["test"])
+    def test_format_chat_history_empty(self):
+        model = MockUserModel(results=[UserTurnResult(response="test")])
+        messages = [{"role": "system", "content": "System prompt"}]
+
+        history = model._format_chat_history(messages)
+
+        assert history == "(empty)"
+
+    def test_format_prompt_fills_template(self):
+        model = MockUserModel(results=[UserTurnResult(response="test")])
         messages = [
-            {"role": "system", "content": "Original system prompt"},
             {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
         ]
 
-        transformed = model._prepare_messages_for_user_perspective(messages)
+        prompt = model._format_prompt(messages)
 
-        assert len(transformed) == 2
-        assert transformed[0]["content"] == model.system_prompt
-        assert "Original system prompt" not in [m["content"] for m in transformed]
+        assert "Test task" in prompt
+        assert "Test prompt" in prompt
+        assert "USER: Hello" in prompt
+        assert "AI: Hi" in prompt
+
+
+class TestUserModelResponseParsing:
+    """Tests for JSON response parsing."""
+
+    def test_parse_valid_json(self):
+        model = MockUserModel(results=[UserTurnResult(response="test")])
+        raw = json.dumps({
+            "current_answer": "The AI explained X",
+            "thought": "I need more detail",
+            "response": "Can you elaborate?",
+        })
+
+        result = model._parse_response(raw)
+
+        assert result.response == "Can you elaborate?"
+        assert result.thought == "I need more detail"
+        assert result.current_answer == "The AI explained X"
+        assert result.is_terminal is False
+        assert result.raw_output == raw
+
+    def test_parse_terminal_signal(self):
+        model = MockUserModel(results=[UserTurnResult(response="test")])
+        raw = json.dumps({
+            "current_answer": "Solved",
+            "thought": "Done",
+            "response": DEFAULT_TERMINAL_SIGNAL,
+        })
+
+        result = model._parse_response(raw)
+
+        assert result.is_terminal is True
+
+    def test_parse_json_with_markdown_fences(self):
+        model = MockUserModel(results=[UserTurnResult(response="test")])
+        raw = '```json\n{"current_answer": "X", "thought": "Y", "response": "Z"}\n```'
+
+        result = model._parse_response(raw)
+
+        assert result.response == "Z"
+        assert result.thought == "Y"
+
+    def test_parse_invalid_json_falls_back(self):
+        model = MockUserModel(results=[UserTurnResult(response="test")])
+        raw = "This is not JSON at all"
+
+        result = model._parse_response(raw)
+
+        assert result.response == raw
+        assert result.is_terminal is False
+        assert result.raw_output == raw
+
+
+# -- ChatSimulator tests --
 
 
 class TestChatSimulator:
     """Tests for the ChatSimulator class."""
 
     def test_rollout_basic(self):
-        user = MockUserModel(responses=["User question 1", "User question 2"])
-        assistant = MockAssistant(responses=["Assistant response 1", "Assistant response 2"])
+        user_results = [
+            UserTurnResult(response="User question 1"),
+            UserTurnResult(response="User question 2"),
+        ]
+        user = MockUserModel(results=user_results)
+        assistant = MockAssistant(responses=["Assistant response 1", "Assistant response 2", "Assistant response 3"])
 
         simulator = ChatSimulator(assistant=assistant, user_model=user)
 
@@ -101,19 +168,55 @@ class TestChatSimulator:
 
         result = simulator.rollout(prefix, max_turns=2)
 
-        assert len(result) == 7
-        assert result[0]["role"] == "system"
-        assert result[1]["role"] == "user"
-        assert result[1]["content"] == "Initial question"
-        assert result[2]["role"] == "assistant"
-        assert result[3]["role"] == "user"
-        assert result[4]["role"] == "assistant"
-        assert result[5]["role"] == "user"
-        assert result[6]["role"] == "assistant"
+        assert isinstance(result, RolloutResult)
+        assert len(result.messages) == 7
+        assert result.messages[0]["role"] == "system"
+        assert result.messages[1]["role"] == "user"
+        assert result.messages[2]["role"] == "assistant"
+        assert result.messages[-1]["role"] == "assistant"
+        assert result.terminated_by_user is False
+
+    def test_rollout_captures_user_turns(self):
+        user_results = [
+            UserTurnResult(response="Q1", thought="thinking about Q1", current_answer="none yet"),
+        ]
+        user = MockUserModel(results=user_results)
+        assistant = MockAssistant(responses=["A1", "A2"])
+
+        simulator = ChatSimulator(assistant=assistant, user_model=user)
+        prefix = [
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "Initial"},
+        ]
+
+        result = simulator.rollout(prefix, max_turns=1)
+
+        assert len(result.user_turns) == 1
+        assert result.user_turns[0].thought == "thinking about Q1"
+        assert result.user_turns[0].current_answer == "none yet"
+
+    def test_rollout_terminal_signal_stops_early(self):
+        user_results = [
+            UserTurnResult(response="Q1"),
+            UserTurnResult(response=DEFAULT_TERMINAL_SIGNAL, is_terminal=True),
+        ]
+        user = MockUserModel(results=user_results)
+        assistant = MockAssistant(responses=["A1", "A2", "A3"])
+
+        simulator = ChatSimulator(assistant=assistant, user_model=user)
+        prefix = [{"role": "user", "content": "Start"}]
+
+        result = simulator.rollout(prefix, max_turns=5)
+
+        assert result.terminated_by_user is True
+        # Terminal message is not appended to messages
+        assert all(m["content"] != DEFAULT_TERMINAL_SIGNAL for m in result.messages)
+        # But it is captured in user_turns
+        assert result.user_turns[-1].is_terminal is True
 
     def test_rollout_preserves_prefix(self):
-        user = MockUserModel(responses=["Follow up"])
-        assistant = MockAssistant(responses=["Response"])
+        user = MockUserModel(results=[UserTurnResult(response="Follow up")])
+        assistant = MockAssistant(responses=["Response", "Response 2"])
 
         simulator = ChatSimulator(assistant=assistant, user_model=user)
 
@@ -124,12 +227,12 @@ class TestChatSimulator:
 
         result = simulator.rollout(prefix, max_turns=1)
 
-        assert result[0]["content"] == "System prompt"
-        assert result[1]["content"] == "Original message"
+        assert result.messages[0]["content"] == "System prompt"
+        assert result.messages[1]["content"] == "Original message"
 
     def test_rollout_does_not_modify_original_prefix(self):
-        user = MockUserModel(responses=["User msg"])
-        assistant = MockAssistant(responses=["Assistant msg"])
+        user = MockUserModel(results=[UserTurnResult(response="User msg")])
+        assistant = MockAssistant(responses=["Assistant msg", "Assistant msg 2"])
 
         simulator = ChatSimulator(assistant=assistant, user_model=user)
 
@@ -141,7 +244,7 @@ class TestChatSimulator:
         assert len(prefix) == original_len
 
     def test_should_assistant_go_next_after_user(self):
-        user = MockUserModel(responses=["test"])
+        user = MockUserModel(results=[UserTurnResult(response="test")])
         assistant = MockAssistant(responses=["test"])
         simulator = ChatSimulator(assistant=assistant, user_model=user)
 
@@ -153,7 +256,7 @@ class TestChatSimulator:
         assert simulator._should_assistant_go_next(messages) is True
 
     def test_should_assistant_go_next_after_assistant(self):
-        user = MockUserModel(responses=["test"])
+        user = MockUserModel(results=[UserTurnResult(response="test")])
         assistant = MockAssistant(responses=["test"])
         simulator = ChatSimulator(assistant=assistant, user_model=user)
 
@@ -166,7 +269,11 @@ class TestChatSimulator:
         assert simulator._should_assistant_go_next(messages) is False
 
     def test_rollout_ends_with_assistant(self):
-        user = MockUserModel(responses=["Q1", "Q2", "Q3"])
+        user_results = [
+            UserTurnResult(response="Q1"),
+            UserTurnResult(response="Q2"),
+        ]
+        user = MockUserModel(results=user_results)
         assistant = MockAssistant(responses=["A1", "A2", "A3"])
 
         simulator = ChatSimulator(assistant=assistant, user_model=user)
@@ -174,23 +281,10 @@ class TestChatSimulator:
         prefix = [{"role": "user", "content": "Start"}]
         result = simulator.rollout(prefix, max_turns=2)
 
-        assert result[-1]["role"] == "assistant"
+        assert result.messages[-1]["role"] == "assistant"
 
-    def test_rollout_with_start_override(self):
-        user = MockUserModel(responses=["User response"])
-        assistant = MockAssistant(responses=["Assistant response"])
 
-        simulator = ChatSimulator(assistant=assistant, user_model=user)
-
-        prefix = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi"},
-        ]
-
-        result = simulator.rollout(prefix, max_turns=1, start_with_assistant=True)
-
-        assert result[2]["role"] == "assistant"
-        assert result[2]["content"] == "Assistant response"
+# -- LocalAssistant tests --
 
 
 class TestLocalAssistantWithTinyModel:
@@ -236,36 +330,34 @@ class TestLocalAssistantWithTinyModel:
         assert len(response) >= 0
 
 
+# -- OpenAIUserModel tests --
+
+
 class TestOpenAIUserModel:
     """Tests for OpenAIUserModel."""
 
-    def test_openai_user_model_initialization(self):
-        """Test OpenAIUserModel can be instantiated with mock client."""
-        with patch("openai.OpenAI") as mock_openai:
-            from collabllm.simulation.user_models import OpenAIUserModel
-
-            model = OpenAIUserModel(
-                model="gpt-4o-mini",
-                api_key="test-key",
-            )
-
-            assert model.model == "gpt-4o-mini"
-            mock_openai.assert_called_once_with(api_key="test-key")
-
     def test_openai_user_model_generate(self):
-        """Test OpenAIUserModel.generate calls the API correctly."""
+        """Test OpenAIUserModel.generate calls API and parses JSON response."""
         with patch("openai.OpenAI") as mock_openai:
             mock_client = MagicMock()
             mock_openai.return_value = mock_client
 
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
-            mock_response.choices[0].message.content = "Generated user message"
+            mock_response.choices[0].message.content = json.dumps({
+                "current_answer": "AI said hello",
+                "thought": "Seems friendly",
+                "response": "Tell me more",
+            })
             mock_client.chat.completions.create.return_value = mock_response
 
             from collabllm.simulation.user_models import OpenAIUserModel
 
-            model = OpenAIUserModel(api_key="test-key")
+            model = OpenAIUserModel(
+                task_desc="Test task",
+                single_turn_prompt="Test prompt",
+                api_key="test-key",
+            )
 
             messages = [
                 {"role": "system", "content": "Be helpful"},
@@ -275,14 +367,15 @@ class TestOpenAIUserModel:
 
             result = model.generate(messages)
 
-            assert result == "Generated user message"
-            mock_client.chat.completions.create.assert_called_once()
+            assert isinstance(result, UserTurnResult)
+            assert result.response == "Tell me more"
+            assert result.thought == "Seems friendly"
+            assert result.current_answer == "AI said hello"
+            assert result.is_terminal is False
 
+            # Verify the API was called with a single user message containing the template
             call_args = mock_client.chat.completions.create.call_args
             sent_messages = call_args.kwargs["messages"]
-
-            assert sent_messages[0]["role"] == "system"
-            assert sent_messages[1]["role"] == "assistant"
-            assert sent_messages[1]["content"] == "Hello"
-            assert sent_messages[2]["role"] == "user"
-            assert sent_messages[2]["content"] == "Hi there"
+            assert len(sent_messages) == 1
+            assert sent_messages[0]["role"] == "user"
+            assert "Test task" in sent_messages[0]["content"]
