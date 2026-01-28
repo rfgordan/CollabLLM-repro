@@ -80,6 +80,23 @@ class LocalAssistant:
             f"{self.model.get_memory_footprint() / (1024**3):.2f} GB"
         )
 
+    @staticmethod
+    def _sanitize_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """
+        Ensure messages alternate user/assistant after any system message.
+        Merges consecutive same-role messages with newlines.
+        """
+        result = []
+        for msg in messages:
+            if result and msg["role"] == result[-1]["role"]:
+                result[-1] = {
+                    "role": msg["role"],
+                    "content": result[-1]["content"] + "\n" + msg["content"],
+                }
+            else:
+                result.append(dict(msg))
+        return result
+
     def _load_lora(self, lora_path: str) -> None:
         """Load LoRA adapter weights."""
         from peft import PeftModel
@@ -97,8 +114,9 @@ class LocalAssistant:
         Returns:
             Generated assistant message content
         """
+        sanitized = self._sanitize_messages(messages)
         prompt = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            sanitized, tokenize=False, add_generation_prompt=True
         )
 
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)

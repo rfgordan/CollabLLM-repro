@@ -116,7 +116,7 @@ class ChatSimulator:
                 return True
             elif msg["role"] == "assistant":
                 return False
-        return True
+        return False
 
     def interactive_rollout(
         self,

@@ -268,6 +268,15 @@ class TestChatSimulator:
 
         assert simulator._should_assistant_go_next(messages) is False
 
+    def test_should_user_go_first_with_only_system_prompt(self):
+        user = MockUserModel(results=[UserTurnResult(response="test")])
+        assistant = MockAssistant(responses=["test"])
+        simulator = ChatSimulator(assistant=assistant, user_model=user)
+
+        messages = [{"role": "system", "content": "prompt"}]
+
+        assert simulator._should_assistant_go_next(messages) is False
+
     def test_rollout_ends_with_assistant(self):
         user_results = [
             UserTurnResult(response="Q1"),
