@@ -39,6 +39,22 @@ conversation = simulator.rollout(
 )
 ```
 
+## Interactive Mode
+
+For debugging or manual experimentation, use `interactive_rollout`:
+
+```python
+# Interactive session - override or auto-generate at each turn
+conversation = simulator.interactive_rollout(
+    conversation_prefix=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"},
+    ],
+    max_turns=5,
+)
+# Press Enter to auto-generate, type to override, '/quit' to exit
+```
+
 ## Design Notes
 
 - **Extensible user models**: `UserModel` is an abstract base class. To add Anthropic/other providers, subclass it and implement `generate()`.
